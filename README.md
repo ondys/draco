@@ -5,29 +5,23 @@
 
 News
 =======
-### Version 1.2.5 release
-* On average 10% faster decoding
-* Improved Javascript metadata API
+### Version 1.3.1 release
+* Fix issue with multiple attributes when skipping an attribute transform
+
+### Version 1.3.0 release
+* Improved kD-tree based point cloud encoding
+  * Now applicable to point clouds with any number of attributes
+  * Support for all integer attribute types and quantized floating point types
+* Improved mesh compression up to 10% (on average ~2%)
+  * For meshes, the 1.3.0 bitstream is fully compatible with 1.2.x decoders
+* Improved Javascript API
+  * Added support for all signed and unsigned integer types
+  * Added support for point clouds to our Javascript encoder API
+* Added support for integer properties to the PLY decoder
 * Bug fixes
 
-### Version 1.2.4 release
-* Up to 20% faster decoding
-* Added support for integer attributes to our Javascript Encoder
-* Fixed issues with THREE.DracoLoader not releasing memory associated with the Draco module
-* OBJ decoder can now be used to parse pure point clouds
-* Added Unity plugins to support runtime loading and design-time importing of encoded Draco files
-
-### Version 1.2.3 release
-* Fixed Visual Studio building issue
-
-### Version 1.2.2 release
-The latest version of Draco brings a number of small bug fixes
-* Fixed issues when parsing ill-formatted .obj files
-
-### Version 1.2.1 release
-The 1.2.1 version of Draco brings a number of enhancements to reduce decoder size and various other fixes
-* Javascript and WebAssembly decoder size reduced by 35%
-* Added specialized Javascript and Webassembly decoders for GLTF (size reduction about 50% compared to the previous version)
+### Previous releases
+https://github.com/google/draco/releases
 
 Description
 ===========
@@ -55,11 +49,12 @@ _**Contents**_
     * [CMake Basics](#cmake-basics)
     * [Mac OS X](#mac-os-x)
     * [Windows](#windows)
-    * [CMake Build Configuration](#cmake-build-config)
+    * [CMake Build Configuration](#cmake-build-configuration)
       * [Debugging and Optimization](#debugging-and-optimization)
       * [Googletest Integration](#googletest-integration)
-      * [Javascript Encoder/Decoder](#javascript-encoder/decoder)
+      * [Javascript Encoder/Decoder](#javascript-encoderdecoder)
     * [Android Studio Project Integration](#android-studio-project-integration)
+    * [Native Android Builds](#native-android-builds)
   * [Usage](#usage)
     * [Command Line Applications](#command-line-applications)
     * [Encoding Tool](#encoding-tool)
@@ -308,10 +303,7 @@ To add Draco to your project:
              externalNativeBuild {
                  cmake {
                      cppFlags "-std=c++11"
-                     cppFlags "-DDRACO_POINT_CLOUD_COMPRESSION_SUPPORTED"
-                     cppFlags "-DDRACO_MESH_COMPRESSION_SUPPORTED"
-                     cppFlags "-DDRACO_STANDARD_EDGEBREAKER_SUPPORTED"
-                     cppFlags "-DDRACO_PREDICTIVE_EDGEBREAKER_SUPPORTED"
+                     arguments "-DANDROID_STL=c++_shared"
                  }
              }
          }
@@ -321,6 +313,31 @@ To add Draco to your project:
              }
          }
      }
+
+Native Android Builds
+---------------------
+
+It's sometimes useful to build Draco command line tools and run them directly on
+Android devices via adb.
+
+~~~~~ bash
+# arm
+$ cmake path/to/draco -DCMAKE_TOOLCHAIN_FILE=path/to/draco/cmake/toolchains/armv7-android-clang-libstdc++.cmake
+$ make
+
+# arm64
+$ cmake path/to/draco -DCMAKE_TOOLCHAIN_FILE=path/to/draco/cmake/toolchains/arm64-android-clang-libstdc++.cmake
+$ make
+~~~~~
+
+Note: The above assumes that make_standalone_toolchain.py has been used to
+generate a standalone NDK toolchain for arm or arm64. In addition, Draco, as of
+this writing, requires that libc++ is used for the stl argument when the
+toolchain is generated.
+
+After building the tools they can be moved to an android device via the use of
+`adb push`, and then run within an `adb shell` instance.
+
 
 Usage
 ======
@@ -368,15 +385,15 @@ features.
 
 In general, the highest setting, `10`, will have the most compression but
 worst decompression speed. `0` will have the least compression, but best
-decompression speed. The default setting is `5`.
+decompression speed. The default setting is `7`.
 
 Encoding Point Clouds
 ---------------------
 
 You can encode point cloud data with `draco_encoder` by specifying the
-`point_cloud parameter`. If you specify the `point_cloud parameter` with a mesh
-input file, `draco_encoder` will ignore the connectivity data and encode the
-positions from the mesh file.
+`-point_cloud` parameter. If you specify the `-point_cloud` parameter with a
+mesh input file, `draco_encoder` will ignore the connectivity data and encode
+the positions from the mesh file.
 
 ~~~~~ bash
 ./draco_encoder -point_cloud -i testdata/bun_zipper.ply -o out.drc
@@ -420,7 +437,7 @@ if (geom_type == draco::TRIANGULAR_MESH) {
 }
 ~~~~~
 
-Please see [src/draco/mesh/mesh.h](src/draco/mesh/mesh.h) for the full Mesh class interface and
+Please see [src/draco/mesh/mesh.h](src/draco/mesh/mesh.h) for the full `Mesh` class interface and
 [src/draco/point_cloud/point_cloud.h](src/draco/point_cloud/point_cloud.h) for the full `PointCloud` class interface.
 
 
@@ -468,13 +485,13 @@ if (mesh.hasOwnProperty('texcoords')) {
     dracoMesh, encoderModule.TEX_COORD, numPoints, 3, mesh.texcoords);
 }
 
-const encodedData = new encoderModule.DracoInt8Array();
 if (method === "edgebreaker") {
   encoder.SetEncodingMethod(encoderModule.MESH_EDGEBREAKER_ENCODING);
 } else if (method === "sequential") {
   encoder.SetEncodingMethod(encoderModule.MESH_SEQUENTIAL_ENCODING);
 }
 
+const encodedData = new encoderModule.DracoInt8Array();
 // Use default encoding setting.
 const encodedLen = encoder.EncodeMeshToDracoBuffer(dracoMesh,
                                                    encodedData);
@@ -498,26 +515,34 @@ to identify the type of geometry, e.g. mesh or point cloud. Then call either
 a Mesh object or a point cloud. For example:
 
 ~~~~~ js
+// Create the Draco decoder.
 const decoderModule = DracoDecoderModule();
 const buffer = new decoderModule.DecoderBuffer();
-buffer.Init(encodedFileData, encodedFileData.length);
+buffer.Init(byteArray, byteArray.length);
 
+// Create a buffer to hold the encoded data.
 const decoder = new decoderModule.Decoder();
 const geometryType = decoder.GetEncodedGeometryType(buffer);
 
+// Decode the encoded geometry.
 let outputGeometry;
+let status;
 if (geometryType == decoderModule.TRIANGULAR_MESH) {
-  outputGeometry = decoder.DecodeBufferToMesh(buffer);
+  outputGeometry = new decoderModule.Mesh();
+  status = decoder.DecodeBufferToMesh(buffer, outputGeometry);
 } else {
-  outputGeometry = decoder.DecodeBufferToPointCloud(buffer);
+  outputGeometry = new decoderModule.PointCloud();
+  status = decoder.DecodeBufferToPointCloud(buffer, outputGeometry);
 }
 
+// You must explicitly delete objects created from the DracoDecoderModule
+// or Decoder.
 decoderModule.destroy(outputGeometry);
 decoderModule.destroy(decoder);
 decoderModule.destroy(buffer);
 ~~~~~
 
-Please see [src/draco/javascript/emscripten/draco_web_encoder.idl](src/draco/javascript/emscripten/draco_web_encoder.idl) for the full API.
+Please see [src/draco/javascript/emscripten/draco_web_decoder.idl](src/draco/javascript/emscripten/draco_web_decoder.idl) for the full API.
 
 Javascript Decoder Performance
 ------------------------------
